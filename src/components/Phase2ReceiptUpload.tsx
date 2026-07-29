@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { CarbonFactorItem, ReceiptItem } from '../types';
 import { findBestFactorMatch, loadEcoCarbonFactors } from '../utils/csvParser';
 import { calculateReceiptItemCarbon } from '../utils/carbonCalculator';
+import { parseReceiptImage } from '../utils/geminiClient';
 import {
   Upload,
   Camera,
@@ -12,9 +13,9 @@ import {
   ArrowLeft,
   Sparkles,
   Loader2,
-  Search,
   CheckCircle2,
-  AlertCircle,
+  Layers,
+  RotateCcw,
 } from 'lucide-react';
 
 interface Phase2ReceiptUploadProps {
@@ -53,6 +54,15 @@ const SAMPLE_RECEIPTS = [
   },
 ];
 
+function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = (err) => reject(err);
+    reader.readAsDataURL(file);
+  });
+}
+
 export const Phase2ReceiptUpload: React.FC<Phase2ReceiptUploadProps> = ({
   onBack,
   onSubmit,
@@ -61,27 +71,30 @@ export const Phase2ReceiptUpload: React.FC<Phase2ReceiptUploadProps> = ({
   const [receiptItems, setReceiptItems] = useState<ReceiptItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string>('');
-  const [selectedFileName, setSelectedFileName] = useState<string>('');
+  const [uploadedReceiptCount, setUploadedReceiptCount] = useState<number>(0);
 
   useEffect(() => {
     loadEcoCarbonFactors().then((data) => {
       setFactors(data);
-      // 초기에는 샘플 1번 자동 세팅
-      applySampleReceipt(0, data);
+      // 초기에는 샘플 1번 자동 추가
+      applySampleReceipt(0, data, false);
     });
   }, []);
 
   const processExtractedItems = (
     rawList: { raw_name: string; price: number; quantity?: number }[],
-    factorList: CarbonFactorItem[] = factors
+    sourceLabel: string,
+    factorList: CarbonFactorItem[] = factors,
+    append: boolean = true
   ) => {
+    const batchId = `receipt_${Date.now()}`;
     const processed: ReceiptItem[] = rawList.map((item, idx) => {
       const match = findBestFactorMatch(item.raw_name, factorList);
       const qty = item.quantity || 1;
       const carbonG = calculateReceiptItemCarbon(item.price, qty, match);
 
       return {
-        id: `item_${Date.now()}_${idx}`,
+        id: `item_${batchId}_${idx}`,
         raw_name: item.raw_name,
         quantity: qty,
         price: item.price,
@@ -91,60 +104,66 @@ export const Phase2ReceiptUpload: React.FC<Phase2ReceiptUploadProps> = ({
         carbon_g: carbonG,
         eco_alternative: match.eco_friendly_alternative,
         reduction_tip: match.reduction_tip,
+        source_receipt: sourceLabel,
       };
     });
 
-    setReceiptItems(processed);
+    setReceiptItems((prev) => (append ? [...prev, ...processed] : processed));
+    setUploadedReceiptCount((prev) => (append ? prev + 1 : 1));
   };
 
-  const applySampleReceipt = (index: number, factorList = factors) => {
+  const applySampleReceipt = (index: number, factorList = factors, append: boolean = true) => {
     const sample = SAMPLE_RECEIPTS[index];
     if (!sample) return;
-    processExtractedItems(sample.items, factorList);
-    setSelectedFileName(sample.name);
-    setStatusMessage(`'${sample.name}' 데이터가 매칭되었습니다.`);
+    processExtractedItems(sample.items, `샘플: ${sample.name}`, factorList, append);
+    setStatusMessage(
+      append
+        ? `'${sample.name}' 품목이 기존 영수증에 누적 추가되었습니다.`
+        : `'${sample.name}' 데이터가 불러와졌습니다.`
+    );
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
 
-    setSelectedFileName(file.name);
+    const fileList = Array.from(files);
     setIsLoading(true);
-    setStatusMessage('Gemini Vision AI가 영수증 이미지의 품목을 파싱 중입니다...');
+    setStatusMessage(`총 ${fileList.length}개 영수증 이미지를 Gemini Vision으로 파싱 중입니다...`);
 
-    try {
-      const reader = new FileReader();
-      reader.onload = async () => {
-        const base64Data = reader.result as string;
+    let newItemsCount = 0;
+    let successCount = 0;
 
-        const res = await fetch('/api/ocr/receipt', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            imageBase64: base64Data,
-            mimeType: file.type || 'image/jpeg',
-          }),
-        });
+    for (let i = 0; i < fileList.length; i++) {
+      const file = fileList[i];
+      const receiptTag = `영수증 #${uploadedReceiptCount + i + 1} (${file.name})`;
 
-        if (!res.ok) throw new Error('Receipt parsing server error');
-        const data = await res.json();
+      try {
+        const base64Data = await readFileAsBase64(file);
+        const result = await parseReceiptImage(base64Data, file.type || 'image/jpeg');
 
-        if (data.items && Array.isArray(data.items)) {
-          processExtractedItems(data.items);
-          setStatusMessage(`Gemini OCR 성공! ${data.items.length}개 품목이 파싱되었습니다.`);
-        } else {
-          throw new Error('No items found in receipt');
+        if (result.items && Array.isArray(result.items) && result.items.length > 0) {
+          processExtractedItems(result.items, receiptTag, factors, true);
+          newItemsCount += result.items.length;
+          successCount++;
         }
-        setIsLoading(false);
-      };
-      reader.readAsDataURL(file);
-    } catch (err) {
-      console.error(err);
-      setStatusMessage('OCR 파싱 실패. 폴백 예시 영수증 데이터를 적용합니다.');
-      applySampleReceipt(0);
-      setIsLoading(false);
+      } catch (err) {
+        console.error(`Error parsing ${file.name}:`, err);
+      }
     }
+
+    setIsLoading(false);
+    if (successCount > 0) {
+      setStatusMessage(
+        `Gemini Vision OCR 성공! ${successCount}장 영수증에서 총 ${newItemsCount}개 품목이 기존 내역에 누적 추가되었습니다.`
+      );
+    } else {
+      setStatusMessage('영수증 파싱 실패. 폴백 예시 영수증 데이터를 누적 적용합니다.');
+      applySampleReceipt(0, factors, true);
+    }
+
+    // Reset input file value so user can upload repeatedly
+    e.target.value = '';
   };
 
   const handleItemChange = (
@@ -201,7 +220,7 @@ export const Phase2ReceiptUpload: React.FC<Phase2ReceiptUploadProps> = ({
 
     const newItem: ReceiptItem = {
       id: `item_${Date.now()}`,
-      raw_name: '신규 영수증 품목',
+      raw_name: '수동 추가 품목',
       quantity: 1,
       price: 5000,
       matched_factor_id: defaultFactor.id,
@@ -210,6 +229,7 @@ export const Phase2ReceiptUpload: React.FC<Phase2ReceiptUploadProps> = ({
       carbon_g: calculateReceiptItemCarbon(5000, 1, defaultFactor),
       eco_alternative: defaultFactor.eco_friendly_alternative,
       reduction_tip: defaultFactor.reduction_tip,
+      source_receipt: '직접 입력',
     };
 
     setReceiptItems((prev) => [...prev, newItem]);
@@ -217,6 +237,14 @@ export const Phase2ReceiptUpload: React.FC<Phase2ReceiptUploadProps> = ({
 
   const handleDeleteItem = (id: string) => {
     setReceiptItems((prev) => prev.filter((item) => item.id !== id));
+  };
+
+  const handleClearAll = () => {
+    if (window.confirm('추출된 모든 영수증 품목을 초기화하시겠습니까?')) {
+      setReceiptItems([]);
+      setUploadedReceiptCount(0);
+      setStatusMessage('모든 영수증 항목이 비워졌습니다.');
+    }
   };
 
   const totalAmount = receiptItems.reduce((sum, item) => sum + (item.price || 0), 0);
@@ -227,14 +255,14 @@ export const Phase2ReceiptUpload: React.FC<Phase2ReceiptUploadProps> = ({
       {/* Header */}
       <div className="bg-stone-900 border border-stone-800 rounded-2xl p-6 mb-6 shadow-xl">
         <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-semibold mb-3">
-          <Camera className="w-3.5 h-3.5" /> Phase 2. 영수증 수집 및 CSV 탄소 계수 매칭
+          <Camera className="w-3.5 h-3.5" /> Phase 2. 영수증 수집 및 CSV 탄소 계수 매칭 (다중 영수증 지원)
         </div>
         <h2 className="text-2xl font-bold text-white mb-2">
-          영수증 사진을 찍어 실제 구매 내역의 탄소 발자국을 추출합니다
+          영수증 사진을 올려 실제 구매 내역의 탄소 발자국을 추출합니다
         </h2>
         <p className="text-stone-300 text-sm leading-relaxed">
-          업로드된 영수증은 Gemini Vision OCR을 거쳐 표준 탄소 계수 DB(<code className="text-emerald-400">eco_carbon_factors.csv</code>)의 품목과 자동 매칭됩니다.
-          수량, 가격, 매칭 카테고리를 직접 수정하실 수 있습니다.
+          여러 장의 영수증 사진을 연속해서 업로드하면 <strong>기존 내역을 삭제하지 않고 계속 누적(Accumulate)</strong>하여 한꺼번에 분석할 수 있습니다.
+          Gemini Vision OCR을 거쳐 표준 탄소 계수 DB(<code className="text-emerald-400">eco_carbon_factors.csv</code>)와 자동 매칭됩니다.
         </p>
 
         {/* Upload Zone & Sample Selection */}
@@ -244,6 +272,7 @@ export const Phase2ReceiptUpload: React.FC<Phase2ReceiptUploadProps> = ({
             <input
               type="file"
               accept="image/*"
+              multiple
               capture="environment"
               onChange={handleFileUpload}
               className="hidden"
@@ -252,7 +281,7 @@ export const Phase2ReceiptUpload: React.FC<Phase2ReceiptUploadProps> = ({
             {isLoading ? (
               <div className="flex flex-col items-center gap-2 text-emerald-400">
                 <Loader2 className="w-8 h-8 animate-spin" />
-                <span className="text-sm font-semibold">Gemini Vision 파싱 중...</span>
+                <span className="text-sm font-semibold">Gemini Vision AI가 영수증 여러 장을 분석 중입니다...</span>
               </div>
             ) : (
               <div className="flex flex-col items-center gap-2 text-center">
@@ -260,10 +289,10 @@ export const Phase2ReceiptUpload: React.FC<Phase2ReceiptUploadProps> = ({
                   <Upload className="w-6 h-6" />
                 </div>
                 <div className="text-stone-200 font-bold text-sm">
-                  영수증 사진 촬영 또는 이미지 파일 선택
+                  영수증 사진 촬영 또는 이미지 여러 장 선택 (누적 추가)
                 </div>
-                <p className="text-xs text-stone-500">
-                  JPG, PNG, WEBP 포맷 지원 (카메라 direct 촬영 가능)
+                <p className="text-xs text-stone-400">
+                  <span className="text-emerald-400 font-semibold">★ 여러 개 선택 가능</span> | JPG, PNG, WEBP 지원 (기존 내역 유지)
                 </p>
               </div>
             )}
@@ -273,20 +302,21 @@ export const Phase2ReceiptUpload: React.FC<Phase2ReceiptUploadProps> = ({
           <div className="bg-stone-950/80 border border-stone-800 rounded-xl p-4 flex flex-col justify-between">
             <div>
               <div className="text-xs font-semibold text-emerald-400 mb-2 flex items-center gap-1">
-                <Sparkles className="w-3.5 h-3.5" /> 영수증 사진이 없으신가요?
+                <Sparkles className="w-3.5 h-3.5" /> 샘플 영수증 누적 추가
               </div>
               <p className="text-xs text-stone-400 mb-3">
-                준비된 대표 샘플 영수증을 선택하여 즉시 분석을 진행해보세요:
+                아래 샘플 영수증을 누르면 기존 내역에 추가됩니다:
               </p>
               <div className="space-y-1.5">
                 {SAMPLE_RECEIPTS.map((s, idx) => (
                   <button
                     key={idx}
                     type="button"
-                    onClick={() => applySampleReceipt(idx)}
-                    className="w-full text-left text-xs p-2 rounded-lg bg-stone-900 border border-stone-800 hover:border-emerald-600 hover:text-emerald-300 transition-all text-stone-300 truncate"
+                    onClick={() => applySampleReceipt(idx, factors, true)}
+                    className="w-full text-left text-xs p-2 rounded-lg bg-stone-900 border border-stone-800 hover:border-emerald-600 hover:text-emerald-300 transition-all text-stone-300 truncate flex items-center justify-between"
                   >
-                    • {s.name}
+                    <span className="truncate">• {s.name}</span>
+                    <span className="text-[10px] text-emerald-400 shrink-0 ml-1">+추가</span>
                   </button>
                 ))}
               </div>
@@ -309,32 +339,52 @@ export const Phase2ReceiptUpload: React.FC<Phase2ReceiptUploadProps> = ({
           <div>
             <h3 className="text-lg font-bold text-white flex items-center gap-2">
               <FileCheck className="w-5 h-5 text-emerald-400" />
-              추출된 영수증 및 CSV DB 매칭 내역
+              추출된 전체 영수증 및 CSV DB 매칭 내역
+              {receiptItems.length > 0 && (
+                <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-800">
+                  총 {receiptItems.length}개 품목 누적됨
+                </span>
+              )}
             </h3>
             <p className="text-xs text-stone-400">
-              영수증 품목명과 CSV 표준 탄소 계수 DB 매칭 결과를 확인하고 조정하세요.
+              여러 장의 영수증 내역이 하나로 통합되었습니다. 품목별 수량, 금액, 매칭 카테고리를 자유롭게 수정하세요.
             </p>
           </div>
 
-          <button
-            type="button"
-            onClick={handleAddItem}
-            className="flex items-center gap-1.5 text-xs bg-stone-800 hover:bg-stone-700 text-stone-200 px-3 py-2 rounded-lg border border-stone-700 transition-all font-medium"
-          >
-            <Plus className="w-4 h-4 text-emerald-400" />
-            <span>품목 직접 추가</span>
-          </button>
+          <div className="flex items-center gap-2">
+            {receiptItems.length > 0 && (
+              <button
+                type="button"
+                onClick={handleClearAll}
+                className="flex items-center gap-1.5 text-xs bg-stone-950 hover:bg-stone-800 text-stone-400 hover:text-red-400 px-3 py-2 rounded-lg border border-stone-800 transition-all font-medium"
+                title="전체 품목 비우기"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>전체 비우기</span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={handleAddItem}
+              className="flex items-center gap-1.5 text-xs bg-stone-800 hover:bg-stone-700 text-stone-200 px-3 py-2 rounded-lg border border-stone-700 transition-all font-medium"
+            >
+              <Plus className="w-4 h-4 text-emerald-400" />
+              <span>품목 직접 추가</span>
+            </button>
+          </div>
         </div>
 
         {receiptItems.length === 0 ? (
           <div className="text-center py-12 text-stone-500 text-sm">
-            영수증 사진을 업로드하거나 샘플을 선택해주세요.
+            영수증 사진 여러 장을 업로드하거나 샘플을 선택하여 품목을 누적해보세요.
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs border-collapse">
               <thead>
                 <tr className="border-b border-stone-800 text-stone-400 uppercase tracking-wider bg-stone-950/50">
+                  <th className="py-3 px-3">출처/영수증</th>
                   <th className="py-3 px-3">영수증 품목명</th>
                   <th className="py-3 px-3">수량</th>
                   <th className="py-3 px-3">금액 (원)</th>
@@ -346,6 +396,13 @@ export const Phase2ReceiptUpload: React.FC<Phase2ReceiptUploadProps> = ({
               <tbody className="divide-y divide-stone-800/60">
                 {receiptItems.map((item) => (
                   <tr key={item.id} className="hover:bg-stone-800/40 transition-colors">
+                    {/* Source Tag */}
+                    <td className="py-2.5 px-3 max-w-[130px]">
+                      <span className="text-[10px] px-2 py-0.5 rounded bg-stone-950 border border-stone-800 text-stone-400 block truncate" title={item.source_receipt || '영수증'}>
+                        {item.source_receipt || '영수증'}
+                      </span>
+                    </td>
+
                     {/* Raw Name */}
                     <td className="py-2.5 px-3">
                       <input
@@ -424,16 +481,16 @@ export const Phase2ReceiptUpload: React.FC<Phase2ReceiptUploadProps> = ({
           <div className="mt-6 pt-4 border-t border-stone-800 flex flex-col sm:flex-row items-center justify-between gap-4 bg-stone-950 p-4 rounded-xl">
             <div className="text-xs text-stone-400 space-y-0.5">
               <div>
-                총 결제 금액: <strong className="text-stone-100">{totalAmount.toLocaleString()}원</strong>
+                총 누적 결제 금액: <strong className="text-stone-100">{totalAmount.toLocaleString()}원</strong>
               </div>
               <div>
-                총 파싱 품목: <strong className="text-stone-100">{receiptItems.length}개</strong>
+                총 누적 품목: <strong className="text-emerald-400">{receiptItems.length}개</strong>
               </div>
             </div>
 
             <div className="flex items-center gap-3">
               <div className="text-right">
-                <div className="text-xs text-stone-400">영수증 전체 산출 탄소량</div>
+                <div className="text-xs text-stone-400">누적 영수증 전체 탄소량</div>
                 <div className="text-xl font-black text-emerald-400 font-mono">
                   {totalCarbonG.toLocaleString()} <span className="text-xs font-normal">g CO2e</span>
                 </div>
@@ -460,7 +517,7 @@ export const Phase2ReceiptUpload: React.FC<Phase2ReceiptUploadProps> = ({
           onClick={() => onSubmit(receiptItems)}
           className="flex items-center gap-2 px-6 py-3 bg-emerald-600 hover:bg-emerald-500 disabled:bg-stone-800 disabled:text-stone-600 text-white font-bold rounded-xl shadow-lg transition-all text-sm"
         >
-          <span>탄소 산출 및 타인 비교(Phase 3)로 이동</span>
+          <span>탄소 산출 및 타인 비교(Phase 3)로 이동 ({receiptItems.length}개 품목)</span>
           <ArrowRight className="w-4 h-4" />
         </button>
       </div>

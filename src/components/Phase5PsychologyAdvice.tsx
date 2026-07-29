@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { DiagnosticReport, PsychologyNudgeCard, SurveyResponse } from '../types';
+import { getPsychologyAdvice } from '../utils/geminiClient';
 import {
   Brain,
   Sparkles,
@@ -41,19 +42,14 @@ export const Phase5PsychologyAdvice: React.FC<Phase5PsychologyAdviceProps> = ({
     let isMounted = true;
     setLoadingAi(true);
 
-    fetch('/api/psychology/advice', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        survey,
-        actualCarbonG: report.actualCarbonG,
-        peerAvgCarbonG: report.peerAvgCarbonG,
-        gapType: report.gapType,
-        gapScore: report.gapScore,
-        hotspots: report.hotspots,
-      }),
+    getPsychologyAdvice({
+      survey,
+      actualCarbonG: report.actualCarbonG,
+      peerAvgCarbonG: report.peerAvgCarbonG,
+      gapType: report.gapType,
+      gapScore: report.gapScore,
+      hotspots: report.hotspots,
     })
-      .then((res) => res.json())
       .then((data) => {
         if (isMounted) {
           setAiAdvice(data);

@@ -39,6 +39,7 @@ export interface ReceiptItem {
   carbon_g: number; // 산출된 탄소 배출량 (g CO2e)
   eco_alternative?: string;
   reduction_tip?: string;
+  source_receipt?: string; // 출처 영수증 구분 (다중 영수증 지원)
 }
 
 export interface ReceiptData {
