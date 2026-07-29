@@ -1,0 +1,5 @@
+group_id,group_name,avg_receipt_amount,avg_carbon_g,top_category,meat_percent,delivery_percent,processed_percent,eco_percent
+G001,전국 2030 1인 가구 평균,45000,12800,배달/외식,35,30,20,15
+G002,친환경 소비 상위 10% 모범 가구,42000,4200,채소/신선식품,12,8,15,65
+G003,전국 일반 가구 평균 (주간 영수증),68000,18500,육류/가공육,38,25,22,15
+G004,고탄소 소비군 (외식/배달 중심),58000,24600,배달/외식,42,38,15,5

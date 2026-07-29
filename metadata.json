@@ -1,0 +1,6 @@
+{
+  "name": "친환경 소비 자기인식 진단 도구",
+  "description": "사용자의 친환경 소비 인식과 실제 영수증 탄소 배출 데이터 간 괴리를 분석하고 심리학 기반 Nudge 조언을 제공하는 대화형 진단 서비스",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
