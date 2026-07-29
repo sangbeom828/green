@@ -60,6 +60,15 @@ export const DataSourceModal: React.FC<DataSourceModalProps> = ({ isOpen, onClos
                   첫 페이지 설문은 <strong>'사용자의 주관적 친환경 인식 점수(Perceived Eco Score, 1~100점)'</strong>와 식습관 기준을 수집합니다. 이 값은 [4단계: 인식 괴리 분석]에서 실제 영수증으로 계산된 <strong>'객관적 탄소 배출 점수(Actual Eco Score)'</strong>와 직접 비교되어, <span className="text-amber-300 font-semibold">"내가 생각하는 나의 모습 vs 영수증에 드러난 실제 소비 습관 간의 착시 유무(Gap)"</span>를 진단하는 핵심 기준선(Baseline)으로 작동합니다.
                 </p>
               </div>
+
+              <div className="bg-stone-900/90 p-2.5 rounded-lg border border-stone-800">
+                <div className="font-bold text-emerald-300 text-xs mb-1">Q. 버셀(Vercel) 배포 시 표시되는 세모(⚠️)와 엑스(❌)는 무엇인가요?</div>
+                <p className="text-stone-300">
+                  • <strong>세모(⚠️ Warning):</strong> Vercel 프로젝트 환경 변수에 <code className="text-emerald-300">GEMINI_API_KEY</code>가 등록되어 있지 않거나 설정 값이 누락되었다는 경고입니다.<br />
+                  • <strong>엑스(❌ Build Notice):</strong> 이전 빌드 시 Output Directory 및 환경 변수 체크 시 발생한 알림입니다.<br />
+                  <strong>해결책:</strong> Vercel 프로젝트 대시보드 ➔ [Settings] ➔ [Environment Variables]에서 <code className="text-emerald-300">GEMINI_API_KEY</code> = <span className="text-amber-300 font-mono">발급받은 Gemini API Key</span>를 등록하고 [Redeploy] 하시면 ❌/⚠️ 경고가 사라지고 실시간 AI 영수증 파싱이 100% 정상 작동합니다.
+                </p>
+              </div>
             </div>
           </div>
 

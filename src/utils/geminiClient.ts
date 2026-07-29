@@ -2,15 +2,57 @@ import { GoogleGenAI } from '@google/genai';
 
 // Client-side fallback API key getter
 function getClientApiKey(): string {
-  // Vite client env variable
   if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_GEMINI_API_KEY) {
     return import.meta.env.VITE_GEMINI_API_KEY;
   }
-  // Standard process.env
   if (typeof process !== 'undefined' && process.env && process.env.GEMINI_API_KEY) {
     return process.env.GEMINI_API_KEY;
   }
   return '';
+}
+
+/**
+ * 대용량 영수증 이미지(모바일 카메라 5~10MB)를 Vercel Payload Limit(4.5MB) 및 AI Vision 속도 향상을 위해 1280px 이하, JPEG quality 0.8로 압축
+ */
+export async function compressImageBase64(base64Str: string, maxDimension = 1280): Promise<string> {
+  return new Promise((resolve) => {
+    if (typeof window === 'undefined') {
+      return resolve(base64Str);
+    }
+    const img = new Image();
+    img.src = base64Str;
+    img.onload = () => {
+      let width = img.width;
+      let height = img.height;
+
+      if (width <= maxDimension && height <= maxDimension && base64Str.length < 1500000) {
+        return resolve(base64Str);
+      }
+
+      if (width > height) {
+        if (width > maxDimension) {
+          height = Math.round((height * maxDimension) / width);
+          width = maxDimension;
+        }
+      } else {
+        if (height > maxDimension) {
+          width = Math.round((width * maxDimension) / height);
+          height = maxDimension;
+        }
+      }
+
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return resolve(base64Str);
+
+      ctx.drawImage(img, 0, 0, width, height);
+      const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.82);
+      resolve(compressedDataUrl);
+    };
+    img.onerror = () => resolve(base64Str);
+  });
 }
 
 export interface ExtractedReceiptItem {
@@ -24,34 +66,42 @@ export interface ParsedReceiptResult {
   date?: string;
   totalAmount?: number;
   items: ExtractedReceiptItem[];
+  errorNotice?: string;
 }
 
 /**
-  * 영수증 OCR 파싱 (서버 API 우선 호출 -> Vercel/정적 웹 호스팅 환경 시 클라이언트 Gemini Direct 호출 -> 스마트 폴백)
-  */
+ * 영수증 OCR 파싱 (이미지 압축 -> 서버 API -> 클라이언트 Gemini Direct)
+ */
 export async function parseReceiptImage(
-  imageBase64: string,
+  rawImageBase64: string,
   mimeType: string = 'image/jpeg'
 ): Promise<ParsedReceiptResult> {
+  // 0. 이미지 압축 처리
+  const imageBase64 = await compressImageBase64(rawImageBase64);
+
+  let lastErrorMsg = '';
+
   // 1. Express backend / Vercel Serverless Function API 시도
   try {
     const res = await fetch('/api/ocr/receipt', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ imageBase64, mimeType }),
+      body: JSON.stringify({ imageBase64, mimeType: 'image/jpeg' }),
     });
 
-    if (res.ok) {
-      const data = await res.json();
-      if (data.items && Array.isArray(data.items) && data.items.length > 0) {
-        return data;
-      }
+    const data = await res.json();
+    if (res.ok && data.items && Array.isArray(data.items) && data.items.length > 0) {
+      return data;
     }
-  } catch (apiErr) {
-    console.warn('Backend API /api/ocr/receipt not reachable, attempting client-side Gemini Vision OCR...', apiErr);
+    if (data.message) {
+      lastErrorMsg = data.message;
+    }
+  } catch (apiErr: any) {
+    console.warn('Serverless API call failed, trying client Gemini Direct...', apiErr);
+    lastErrorMsg = apiErr?.message || 'Server API connection error';
   }
 
-  // 2. Vercel 정적 호스팅 등 서버 API 미작동 시 클라이언트 단 직접 Gemini Vision 호출
+  // 2. Vercel 정적 호스팅 및 서버 API 미작동/환경변수 미설정 시 클라이언트 단 직접 Gemini Vision 호출
   const apiKey = getClientApiKey();
   if (apiKey) {
     try {
@@ -88,7 +138,7 @@ JSON 형식:
           {
             role: 'user',
             parts: [
-              { inlineData: { mimeType, data: cleanBase64 } },
+              { inlineData: { mimeType: 'image/jpeg', data: cleanBase64 } },
               { text: prompt },
             ],
           },
@@ -99,31 +149,25 @@ JSON 형식:
       const jsonMatch = responseText.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
         const parsedData = JSON.parse(jsonMatch[0]);
-        if (parsedData.items && Array.isArray(parsedData.items)) {
+        if (parsedData.items && Array.isArray(parsedData.items) && parsedData.items.length > 0) {
           return parsedData;
         }
       }
-    } catch (clientGeminiErr) {
+    } catch (clientGeminiErr: any) {
       console.error('Client Gemini Vision OCR Error:', clientGeminiErr);
+      lastErrorMsg = clientGeminiErr?.message || 'Client Gemini API Key error';
     }
   }
 
-  // 3. API Key 및 네트워크 불가 시 스마트 영수증 분석 폴백
-  return {
-    storeName: '업로드 영수증 (스마트 자동 파싱)',
-    date: new Date().toISOString().split('T')[0],
-    totalAmount: 28500,
-    items: [
-      { raw_name: '한우 불고기 300g', quantity: 1, price: 18000 },
-      { raw_name: '삼다수 생수 2L 6팩', quantity: 1, price: 5400 },
-      { raw_name: '일회용 비닐장갑 100매', quantity: 1, price: 3200 },
-      { raw_name: '국산 유기농 두부 300g', quantity: 1, price: 1900 },
-    ],
-  };
+  // 3. API 키가 없거나 추출 실패 시 예시 데이터로 덮어쓰지 않고 에러 플래그와 함께 예외 던지기
+  throw new Error(
+    lastErrorMsg ||
+      'Vercel 대시보드의 [Settings] -> [Environment Variables]에 GEMINI_API_KEY 등록이 필요합니다.'
+  );
 }
 
 /**
- * 심리학 행동 넛지 조언 생성 (서버 API -> 클라이언트 Gemini -> 스마트 폴백)
+ * 심리학 행동 넛지 조언 생성
  */
 export async function getPsychologyAdvice(payload: any) {
   try {
@@ -187,3 +231,4 @@ export async function getPsychologyAdvice(payload: any) {
     behavioralTip: '마트 장보기 전 친환경 품목 목록 1가지를 미리 적어가기(If-Then)',
   };
 }
+

@@ -27,17 +27,9 @@ export default async function handler(req: any, res: any) {
 
     const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
     if (!apiKey) {
-      return res.json({
-        storeName: '그린마트 (Vercel 기본 파싱)',
-        date: new Date().toISOString().split('T')[0],
-        totalAmount: 38500,
-        items: [
-          { raw_name: '한우 불고기 300g', quantity: 1, price: 18500 },
-          { raw_name: '삼다수 생수 2L 6팩', quantity: 1, price: 5400 },
-          { raw_name: '아이스 아메리카노', quantity: 2, price: 8000 },
-          { raw_name: '유기농 두부 300g', quantity: 1, price: 2800 },
-          { raw_name: '종량제 비닐봉투 20L', quantity: 2, price: 900 },
-        ],
+      return res.status(400).json({
+        error: 'MISSING_GEMINI_API_KEY',
+        message: 'Vercel 대시보드의 Environment Variables에 GEMINI_API_KEY를 등록해야 실제 영수증 분석이 작동합니다.'
       });
     }
 
@@ -87,20 +79,14 @@ JSON 형식:
       const parsedData = JSON.parse(jsonMatch[0]);
       return res.status(200).json(parsedData);
     } else {
-      throw new Error('Failed to parse JSON from Gemini vision output');
+      return res.status(500).json({ error: 'FAILED_TO_PARSE_VISION_OUTPUT', message: '영수증 이미지에서 글자를 파싱하지 못했습니다.' });
     }
   } catch (error: any) {
     console.error('Vercel Receipt OCR Error:', error);
-    return res.status(200).json({
-      storeName: '스마트 영수증 (Vercel 자동 파싱)',
-      date: new Date().toISOString().split('T')[0],
-      totalAmount: 29800,
-      items: [
-        { raw_name: '돼지 삼겹살 300g', quantity: 1, price: 12500 },
-        { raw_name: '배달 떡볶이 세트', quantity: 1, price: 14000 },
-        { raw_name: '일회용 플라스틱 컵', quantity: 3, price: 1500 },
-        { raw_name: '국산 친환경 콩나물', quantity: 1, price: 1800 },
-      ],
+    return res.status(500).json({
+      error: 'SERVERLESS_OCR_FAILED',
+      message: error?.message || 'Vercel Serverless Function 실행 실패'
     });
   }
 }
+

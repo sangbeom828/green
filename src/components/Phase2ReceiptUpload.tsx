@@ -155,11 +155,12 @@ export const Phase2ReceiptUpload: React.FC<Phase2ReceiptUploadProps> = ({
     setIsLoading(false);
     if (successCount > 0) {
       setStatusMessage(
-        `Gemini Vision OCR 성공! ${successCount}장 영수증에서 총 ${newItemsCount}개 품목이 기존 내역에 누적 추가되었습니다.`
+        `Gemini Vision OCR 분석 완료! 총 ${successCount}장 영수증에서 ${newItemsCount}개 품목이 누적 추가되었습니다.`
       );
     } else {
-      setStatusMessage('영수증 파싱 실패. 폴백 예시 영수증 데이터를 누적 적용합니다.');
-      applySampleReceipt(0, factors, true);
+      setStatusMessage(
+        `⚠️ 영수증 파싱 실패: Vercel 대시보드에서 Environment Variable 'GEMINI_API_KEY'를 추가하셨는지 확인해주세요. (아래 샘플 버튼이나 직접 입력으로도 진행 가능합니다)`
+      );
     }
 
     // Reset input file value so user can upload repeatedly
